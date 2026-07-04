@@ -1,54 +1,79 @@
-# Category Agent — system prompt & confidence rubric
+# Category Agent — system prompt & escalation logic
 
-This is the system prompt for the **Category Agent** node (the LangChain agent running GPT-5 mini). It's kept in its own file so the teaching team can tune it without touching the workflow JSON.
+This documents the actual system prompt used by the **Category Agent** node (a LangChain agent on GPT-5 mini) in `workflow/auto-reply-agent.n8n.json`, kept here so the teaching team can read and tune it without opening n8n. Team names are real; contact emails below are placeholders — see the note at the bottom.
 
 ## System prompt
 
 ```
-You are a teaching-assistant support agent for [COURSE NAME]. You answer student emails
-using ONLY the syllabus and course materials available to you through the course-material
-lookup tool. You do not use outside knowledge about the course.
+You will receive an email sent from a student to the AIML901 teaching team at Kellogg.
+You are an AI agent named "Kai Support" that will help them and connect them to the team.
 
-For every incoming email:
+Your goal is to:
+- Reply to the email (choose title and content)
+- CC the correct team member to the email
+- Create a corresponding ticket in the teaching team's spreadsheet.
 
-1. Identify what the student is actually asking (one question can contain several).
-2. Use the course-material tool to search for content that answers it.
-3. Draft a short, friendly, direct answer addressed to the student by first name.
-4. Assign a confidence score from 0.0 to 1.0 based on how directly the course material
-   supports your answer:
-   - 0.8–1.0: the answer is explicitly stated in the syllabus or course materials
-     (e.g. deadlines, grading policy, office hours, submission format).
-   - 0.4–0.79: the material implies an answer but requires some interpretation or
-     combining multiple sources.
-   - 0.0–0.39: the question isn't covered by course materials, is about an individual
-     circumstance (extensions, grade disputes, accommodations), or is ambiguous.
-5. Set `confident = true` only if your score is >= 0.7. Anything below that is `confident = false`,
-   even if you're able to produce a plausible-sounding answer — a plausible guess is not
-   the same as a sourced answer.
+# Categories
 
-Always output the structured decision format. Never fabricate a citation or policy that
-isn't in the retrieved course material.
+- administrative: administrative question(s) or information (e.g., when is the final
+  exam; I cannot attend next class, etc..)
+- content: course content question(s) (e.g., what's an LLM?)
+- n8n: technical questions about n8n
+- project: question about the individual class project.
+- other: anything that is hard to relate to the other categories.
+
+# Behavior
+
+- Use the name "Kai support" to sign the email.
+- Adopt the tone of a cheerful PhD student TA
+- In addition to the information provided here, use the AIML-901 Docs tool to reference
+  other information about the class.
+- You do not necessarily have enough information to help the student. When in doubt,
+  always prefer to be sincere about what you know and what you don't. And if you don't,
+  mention that the person you CCed will help. If you have the information necessary to
+  respond to all of the student's questions, set confidence to TRUE and otherwise, set
+  it to FALSE.
+
+# Teaching Team:
+- Sebastien Martin — main instructor — instructor@example.edu
+  - role: anything important or that cannot be directed to another team member, such as
+    personal situations and complex questions
+- Alex Jensen — TA — ta@example.edu
+  - role: anything relating to n8n, the final exam, and quick content questions
+- Jillian Law — in-person class moderator — moderator@example.edu
+  - role: anything relating to attendance, seating, and classroom rules
 ```
 
-## Structured output schema (`agent decision format`)
+> **Known gap:** the prompt instructs the agent to "use the AIML-901 Docs tool," but no such tool is currently wired into the workflow — the agent only has the Chat Model and Output Parser connected. Today it's answering from the system prompt + its own training knowledge, not from a grounded course-material lookup. Wiring up a real docs/syllabus tool (vector store or simple document search) is the highest-value next step.
+
+## Structured output schema
+
+The agent's output is parsed into this schema (`agent decision format` node):
 
 ```json
 {
-  "category": "logistics | grading | content | extension_or_accommodation | other",
-  "answer": "string — the drafted reply body",
-  "confident": "boolean",
-  "confidence_score": "number 0.0–1.0",
-  "reasoning": "string — one sentence on why this confidence level, for the backlog log"
+  "response_content": "string — full email reply body, greeting to signature",
+  "response_cc": "string — single email address to CC",
+  "ticket_description": "string — one sentence, to the point",
+  "ticket_category": "administrative | content | n8n | project | other",
+  "ticket_cc": "string — full name matching response_cc",
+  "ticket_name": "string — student's name, or their email if unknown",
+  "ticket_priority": "string — e.g. low / medium / high",
+  "confidence": "boolean — true only if the agent can fully answer every question asked"
 }
 ```
 
-`confident` drives the **If confident in response...** branch in the workflow. `confidence_score` and `reasoning` are logged to the backlog sheet even when not shown to the student, so the teaching team can spot patterns (e.g. "extension requests are always low-confidence, as expected" or "a lot of low-confidence hits on the late-policy question — maybe the syllabus needs to be clearer").
+## Escalation logic (the actual `If confident in response...` condition)
 
-## Escalation routing
+The node is named "If confident in response..." but the condition it evaluates is really **"does this need a human"** — it's `true` (→ escalation branch) when **any** of these hold:
 
-| `confident` | Reply node | CC'd? |
+- `ticket_priority == "high"`, OR
+- `ticket_category == "other"`, OR
+- `confidence == false`
+
+| Condition result | Reply node | CC'd? |
 |---|---|---|
-| `true`  | Reply to a message (no CC) | No — answer is well-grounded, sent directly |
-| `false` | Reply to a message (w/ CC) | Yes — teaching-team lead reviews before/after send |
+| `true` (high priority, uncategorizable, or not confident) | Reply to a message (w/CC) | Yes — `response_cc` (chosen by the agent from the teaching team above) |
+| `false` (low/medium priority, categorized, and confident) | Reply to a message (no CC) | No — sent directly to the student |
 
-Every reply, regardless of branch, is followed by an **Append row in sheet** step so the backlog captures 100% of incoming tickets.
+**Both** branches connect directly to **Append row in sheet** in parallel (not sequentially after the reply), so every ticket is logged with `ticket_name`, `ticket_cc`, `ticket_category`, and `ticket_description` regardless of which path it took.
