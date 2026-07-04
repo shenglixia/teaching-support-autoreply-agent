@@ -1,6 +1,6 @@
 # Auto Student Support Reply Agent
 
-An n8n workflow ("Kai Support") that helps the AIML901 teaching team at Kellogg answer routine student emails automatically, while keeping a human in the loop whenever the AI isn't confident, a request is high priority, or it doesn't fit a known category.
+An n8n workflow ("Course Assistant") that helps the course teaching team answer routine student emails automatically, while keeping a human in the loop whenever the AI isn't confident, a request is high priority, or it doesn't fit a known category.
 
 ## The problem
 
@@ -11,7 +11,7 @@ As a TA for a large class, the teaching team gets flooded with emails that ask t
 An email-triggered agent that:
 
 1. Reads an incoming student email and pulls the sender's first name.
-2. An LLM agent ("Kai Support", GPT-5 mini) drafts a reply and classifies the ticket into a structured decision: category, priority, a CC target, and a `confidence` flag (true only if it can fully answer every question asked).
+2. An LLM agent ("Course Assistant", GPT-5 mini) drafts a reply and classifies the ticket into a structured decision: category, priority, a CC target, and a `confidence` flag (true only if it can fully answer every question asked).
 3. Routes on **need for a human**, not just raw confidence — a ticket gets escalated (CC'd) if *any* of these are true:
    - `confidence == false` (the agent doesn't have enough information), **or**
    - `ticket_priority == "high"`, **or**
@@ -22,24 +22,9 @@ This keeps the teaching team out of the loop for routine questions the agent can
 
 ## Architecture
 
-```
-Gmail Trigger (new email)
-        │
-        ▼
-  Set First Name              (pulls the student's first name for a personalized reply)
-        │
-        ▼
-  Category Agent              (LLM agent "Kai Support": drafts reply + structured decision)
-   ├─ Chat Model: GPT-5 mini
-   └─ Output Parser: structured "agent decision" schema
-        │
-        ▼
-  If confident in response...  (true = needs escalation: high priority OR category=other OR confidence=false)
-   ├─ true  ──┬─▶ Reply to a message (w/ CC to the relevant teaching-team member)
-   │          └─▶ Append row in sheet
-   └─ false ──┬─▶ Reply to a message (no CC, sent directly)
-              └─▶ Append row in sheet
-```
+![Workflow diagram: Gmail trigger sets the sender's first name, feeds the Category Agent (GPT-5 mini chat model, memory, tools, structured output parser), which branches on an "If confident in response" check — true routes to a CC'd reply, false to a direct reply — and both branches append a row to the backlog sheet.](docs/assets/flow.png)
+
+`true` on the confidence check means the ticket needs a human (high priority, uncategorizable, or the agent isn't confident) → CC'd reply. `false` means it's routine and confidently answered → direct reply, no CC. Both branches append a row to the backlog sheet in parallel.
 
 See [`workflow/auto-reply-agent.n8n.json`](workflow/auto-reply-agent.n8n.json) for the importable n8n workflow, and [`docs/category-agent-prompt.md`](docs/category-agent-prompt.md) for the full system prompt, structured-output schema, and escalation logic.
 
@@ -49,15 +34,15 @@ See [`workflow/auto-reply-agent.n8n.json`](workflow/auto-reply-agent.n8n.json) f
 |---|---|
 | **When receiving an email** (Gmail Trigger) | Watches the shared course inbox for new student emails. |
 | **Set First Name** | Extracts the student's first name from the email for a friendlier reply. |
-| **Category Agent** | LangChain agent (GPT-5 mini) that reads the question, drafts a reply as "Kai Support," and outputs a structured decision (`response_content`, `response_cc`, `ticket_category`, `ticket_priority`, `confidence`, etc.). |
+| **Category Agent** | LangChain agent (GPT-5 mini) that reads the question, drafts a reply as "Course Assistant," and outputs a structured decision (`response_content`, `response_cc`, `ticket_category`, `ticket_priority`, `confidence`, etc.). |
 | **If confident in response...** | Despite the name, this checks whether the ticket *needs a human*: true if priority is high, category is "other", or confidence is false. |
 | **Reply to a message (w/ CC)** | Sent on the escalation branch — replies to the thread and CCs whichever teaching-team member the agent picked (instructor, TA, or class moderator, depending on the question). |
 | **Reply to a message (no CC)** | Sent when the ticket is routine and the agent is confident — replies to the thread directly, no human involved. |
 | **Append row in sheet** | Logs every ticket (`ticket_name`, `ticket_cc`, `ticket_category`, `ticket_description`) to a Google Sheet backlog, in parallel with the reply, so the teaching team can track support volume and trends. |
 
-## Known gap
+## TODO
 
-The system prompt instructs the agent to "use the AIML-901 Docs tool" to look up course material, but no such tool is currently wired into the workflow — only the Chat Model and Output Parser are connected to the Category Agent. Today the agent answers from the system prompt and its own general knowledge, not from a grounded syllabus/course-content lookup. Wiring up a real docs tool (vector store over the syllabus, or a simple document search) is the highest-value next step, since it would let low-priority "content"/"administrative" questions be answered with actual citations instead of the model's best guess.
+- [ ] **Build a knowledge base for the Course Docs tool.** The system prompt already instructs the agent to "use the Course Docs tool" to look up course material, but no such tool is wired into the workflow yet — the Category Agent only has the Chat Model and Output Parser connected. Today it answers from the system prompt and its own general knowledge, not from a grounded syllabus/course-content lookup. Next step: index the syllabus and course materials (vector store or simple document search) and wire it in as a tool, so "content"/"administrative" questions get answered with actual citations instead of the model's best guess.
 
 ## Setup
 
@@ -72,4 +57,4 @@ The system prompt instructs the agent to "use the AIML-901 Docs tool" to look up
 
 ## Status
 
-Working first version, currently in use for AIML901. Next step: wire up a real course-material lookup tool so answers are grounded in the syllabus instead of the model's own knowledge.
+Working first version, currently in use for a live course. Next step: wire up a real course-material lookup tool so answers are grounded in the syllabus instead of the model's own knowledge.
